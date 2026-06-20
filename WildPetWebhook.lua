@@ -18,13 +18,13 @@ local _cloneref        = typeof(cloneref) == "function" and cloneref or function
 -- ── VPS / Multi-bot Performance Optimizations ────────────────────────────────
 -- FPS cap: 1 FPS is enough for a headless scanner; saves massive CPU per instance.
 -- Tries Delta, Synapse, Fluxus, then generic fallback.
-pcall(function() setfpscap(1) end)
-pcall(function() if syn and syn.set_fps_cap then syn.set_fps_cap(1) end end)
-pcall(function() if fluxus and fluxus.set_fps_cap then fluxus.set_fps_cap(1) end end)
+pcall(function() setfpscap(5) end)
+pcall(function() if syn and syn.set_fps_cap then syn.set_fps_cap(5) end end)
+pcall(function() if fluxus and fluxus.set_fps_cap then fluxus.set_fps_cap(5) end end)
 pcall(function()
     -- Delta executor flag: disable renderer outright
     if getgenv and getgenv().delta and getgenv().delta.setfpscap then
-        getgenv().delta.setfpscap(1)
+        getgenv().delta.setfpscap(5)
     end
 end)
 
@@ -152,7 +152,7 @@ local CFG = {
     botUsername    = "Bot1",         -- shown in dashboard bots count
 
     -- Discord webhook (leave "" to skip Discord)
-    webhookUrl     = "",
+    webhookUrl     = "https://discord.com/api/webhooks/1517921383441629206/rIV_Z6QMCbfFKSrIWys1rhMsyfaLCkns124Cl9ovz1tkhR4Qa312aDrxFONh4LBaAwsi",
 
     -- Scanning
     notifyAll      = false,
