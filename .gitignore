@@ -1,0 +1,7 @@
+node_modules/
+*.log
+.env
+proxies.txt
+proxiesTWO.txt
+*.json.bak
+.DS_Store
