@@ -1,11 +1,11 @@
--- WildPetWebhook.lua — GaG2 Wild Pet Scanner + Server Hopper + API Reporter
--- Scans Grow a Garden 2 for wild pets, reports to your hopper API & Discord, then hops to next server.
+-- WildPetWebhook.lua — GaG2 Wild Pet Scanner + Server Hopper
+-- Per server: scans ONCE, reports findings to your hopper API & Discord, then hops to the next server. Repeat.
+-- No teleport-to-pet logic — it only scans and hops.
 
 if not game:IsLoaded() then game.Loaded:Wait() end
 
 local Players          = game:GetService("Players")
 local RunService       = game:GetService("RunService")
-local TweenService     = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace        = game:GetService("Workspace")
 local HttpService      = game:GetService("HttpService")
@@ -68,21 +68,15 @@ local CFG = {
 
     -- Scanning
     notifyAll      = false,
-    scanInterval   = 1.5,           -- seconds between workspace scans
     minValue       = 0,             -- skip pets below this value
+    settleDelay    = 5,             -- seconds to wait after join before scanning (let workspace load)
 
-    -- TP
-    autoTp         = false,
-    tpMethodIdx    = 1,             -- 1 = Auto cascade; 2-8 = specific
-    antiRollback   = true,
-    arTolerance    = 8,
-    arHoldFrames   = 40,
-    arMaxAttempts  = 3,
-
-    -- Server hopping
-    serverHopping  = false,         -- enable to cycle through hopper pool
-    hopInterval    = 120,           -- seconds to spend per server before hopping
+    -- Server hopping (the core loop: scan once -> hop -> repeat)
+    serverHopping  = true,
     placeId        = 97598239454123,-- Grow a Garden 2
+    -- Raw URL used to re-run this script in the next server after a teleport.
+    -- Point it at your hosted copy of this file (GitHub raw, pastebin, etc.).
+    loaderUrl      = "https://raw.githubusercontent.com/Unnamedj/gag2/main/WildPetWebhook.lua",
 
     -- GaG2 wild pet names to notify (lowercase)
     notifyList     = {
@@ -191,7 +185,6 @@ local function scanPets()
                         rawName  = child.Name,
                         name     = cleanName(child.Name),
                         instance = child,
-                        cf       = part.CFrame,
                         pos      = part.Position,
                         value    = getValue(child),
                         time     = getTimeLabel(child),
@@ -211,189 +204,16 @@ local function scanPets()
     return found
 end
 
--- ── TP Engine — 7 methods + smart cascade ────────────────────────────────────
-local TP_METHODS = {
-    { id = "auto",     name = "Auto (Best)"   },
-    { id = "cframe",   name = "CFrame Instant"},
-    { id = "glide",    name = "CFrame Glide"  },
-    { id = "velocity", name = "Velocity"      },
-    { id = "hybrid",   name = "Hybrid"        },
-    { id = "align",    name = "AlignPosition" },
-    { id = "bodyvel",  name = "BodyVelocity"  },
-    { id = "tween",    name = "TweenService"  },
-}
-
-local function _move_cframe(hrp, dest)
-    hrp.AssemblyLinearVelocity  = Vector3.zero
-    hrp.AssemblyAngularVelocity = Vector3.zero
-    pcall(function() hrp.CFrame = dest end)
-    RunService.Heartbeat:Wait()
-    hrp.AssemblyLinearVelocity = Vector3.zero
-end
-
-local function _move_glide(hrp, dest)
-    local start = hrp.CFrame
-    for i = 1, 20 do
-        if not hrp.Parent then break end
-        local t = i / 20; t = t*t*(3 - 2*t)
-        pcall(function() hrp.CFrame = start:Lerp(dest, t) end)
-        hrp.AssemblyLinearVelocity = Vector3.zero
-        RunService.Heartbeat:Wait()
-    end
-    hrp.AssemblyLinearVelocity = Vector3.zero
-end
-
-local function _move_velocity(hrp, dest)
-    local speed, done, conn = 400, false, nil
-    conn = RunService.Heartbeat:Connect(function()
-        if not hrp or not hrp.Parent or done then if conn then conn:Disconnect() end; return end
-        local diff = dest.Position - hrp.Position
-        local mag  = diff.Magnitude
-        if mag < 3 then
-            done = true; conn:Disconnect()
-            pcall(function() hrp.CFrame = dest end)
-            hrp.AssemblyLinearVelocity = Vector3.zero; return
-        end
-        hrp.AssemblyLinearVelocity = diff.Unit * math.min(speed, mag * 10)
-    end)
-    local t0 = os.clock()
-    while not done and os.clock() - t0 < 6 do task.wait(0.04) end
-    if conn then pcall(function() conn:Disconnect() end) end
-    hrp.AssemblyLinearVelocity = Vector3.zero
-end
-
-local function _move_hybrid(hrp, dest)
-    local far, done, conn = (dest.Position - hrp.Position).Magnitude > 40, false, nil
-    if far then
-        conn = RunService.Heartbeat:Connect(function()
-            if not hrp or not hrp.Parent or done then if conn then conn:Disconnect() end; return end
-            local diff = dest.Position - hrp.Position
-            if diff.Magnitude < 12 then done = true; conn:Disconnect(); return end
-            hrp.AssemblyLinearVelocity = diff.Unit * math.min(380, diff.Magnitude * 9)
-        end)
-        local t0 = os.clock()
-        while not done and os.clock() - t0 < 5 do task.wait(0.04) end
-        if conn then pcall(function() conn:Disconnect() end) end
-    end
-    hrp.AssemblyLinearVelocity = Vector3.zero
-    pcall(function() hrp.CFrame = dest end)
-    hrp.AssemblyLinearVelocity = Vector3.zero
-    RunService.Heartbeat:Wait()
-end
-
-local function _move_align(hrp, dest)
-    local att0 = Instance.new("Attachment"); att0.Parent = hrp
-    local att1 = Instance.new("Attachment"); att1.WorldPosition = dest.Position; att1.Parent = Workspace.Terrain
-    local ap = Instance.new("AlignPosition")
-    ap.Mode = Enum.PositionAlignmentMode.OneAttachment
-    ap.Attachment0 = att0; ap.MaxForce = 1e6; ap.MaxVelocity = 400; ap.Responsiveness = 200
-    ap.Position = dest.Position; ap.Parent = hrp
-    local t0 = os.clock()
-    while os.clock() - t0 < 4 do
-        if not hrp or not hrp.Parent then break end
-        if (hrp.Position - dest.Position).Magnitude < 5 then break end
-        task.wait(0.05)
-    end
-    pcall(function() ap:Destroy() end); pcall(function() att0:Destroy() end); pcall(function() att1:Destroy() end)
-    pcall(function() hrp.CFrame = dest end)
-    hrp.AssemblyLinearVelocity = Vector3.zero
-end
-
-local function _move_bodyvel(hrp, dest)
-    local bv = Instance.new("BodyVelocity")
-    bv.MaxForce = Vector3.new(1e6, 1e6, 1e6); bv.P = 1e4; bv.Parent = hrp
-    local done, conn = false, nil
-    conn = RunService.Heartbeat:Connect(function()
-        if not hrp or not hrp.Parent or done then if conn then conn:Disconnect() end; return end
-        local diff = dest.Position - hrp.Position
-        if diff.Magnitude < 4 then
-            done = true; conn:Disconnect()
-            pcall(function() bv:Destroy() end)
-            pcall(function() hrp.CFrame = dest end)
-            hrp.AssemblyLinearVelocity = Vector3.zero; return
-        end
-        bv.Velocity = diff.Unit * math.min(360, diff.Magnitude * 8)
-    end)
-    local t0 = os.clock()
-    while not done and os.clock() - t0 < 6 do task.wait(0.05) end
-    if conn then pcall(function() conn:Disconnect() end) end
-    pcall(function() bv:Destroy() end)
-    hrp.AssemblyLinearVelocity = Vector3.zero
-end
-
-local function _move_tween(hrp, dest)
-    local tw = TweenService:Create(hrp, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { CFrame = dest })
-    tw:Play(); tw.Completed:Wait()
-    hrp.AssemblyLinearVelocity = Vector3.zero
-end
-
-local MOVE_FNS = {
-    cframe=_move_cframe, glide=_move_glide, velocity=_move_velocity,
-    hybrid=_move_hybrid, align=_move_align, bodyvel=_move_bodyvel, tween=_move_tween,
-}
-local AUTO_ORDER = { "cframe", "hybrid", "velocity", "glide", "bodyvel", "align", "tween" }
-
-local function holdPosition(hrp, dest, TOL, frames)
-    local held = 0
-    for _ = 1, frames do
-        local ch = LocalPlayer.Character
-        hrp = ch and ch:FindFirstChild("HumanoidRootPart")
-        if not hrp or not hrp.Parent then break end
-        if (hrp.Position - dest.Position).Magnitude > TOL then
-            pcall(function() hrp.CFrame = dest end)
-            hrp.AssemblyLinearVelocity  = Vector3.zero
-            hrp.AssemblyAngularVelocity = Vector3.zero
-        else held = held + 1 end
-        RunService.Heartbeat:Wait()
-    end
-    return held
-end
-
-local function tpTo(targetCF, onStatus)
-    local function stat(t) if onStatus then onStatus(t) end end
-    local ch  = LocalPlayer.Character
-    local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
-    if not hrp or not hrp.Parent then return false end
-    local dest   = targetCF * CFrame.new(0, 3, 0)
-    local TOL    = CFG.arTolerance
-    local thresh = math.floor(CFG.arHoldFrames * 0.4)
-    local methodId = TP_METHODS[CFG.tpMethodIdx].id
-    local attempts = {}
-    if methodId == "auto" then
-        for _, id in ipairs(AUTO_ORDER) do attempts[#attempts+1] = id end
-    else
-        attempts[#attempts+1] = methodId
-        for _, id in ipairs(AUTO_ORDER) do if id ~= methodId then attempts[#attempts+1] = id end end
-    end
-    for pass = 1, CFG.arMaxAttempts do
-        ch  = LocalPlayer.Character
-        hrp = ch and ch:FindFirstChild("HumanoidRootPart")
-        if not hrp or not hrp.Parent then return false end
-        local methodToUse = attempts[((pass - 1) % #attempts) + 1]
-        stat("Attempt " .. pass .. " — " .. methodToUse)
-        local moveFn = MOVE_FNS[methodToUse]
-        if moveFn then pcall(moveFn, hrp, dest) end
-        ch  = LocalPlayer.Character
-        hrp = ch and ch:FindFirstChild("HumanoidRootPart")
-        if not hrp or not hrp.Parent then return false end
-        if not CFG.antiRollback then
-            if (hrp.Position - dest.Position).Magnitude <= TOL then return true end
-        else
-            local held = holdPosition(hrp, dest, TOL, CFG.arHoldFrames)
-            ch  = LocalPlayer.Character; hrp = ch and ch:FindFirstChild("HumanoidRootPart")
-            local finalD = (hrp and hrp.Parent) and (hrp.Position - dest.Position).Magnitude or math.huge
-            if finalD <= TOL and held >= thresh then return true end
-        end
-        task.wait(0.08)
-    end
-    return false
-end
-
 -- ── HTTP ──────────────────────────────────────────────────────────────────────
 local _httpReq = (syn and syn.request)
     or (http and http.request)
     or (rawget(_G, "request"))
     or (fluxus and fluxus.request)
+
+local _queueTp = (syn and syn.queue_on_teleport)
+    or (fluxus and fluxus.queue_on_teleport)
+    or (rawget(_G, "queue_on_teleport"))
+    or (rawget(_G, "queueonteleport"))
 
 local function sendWebhook(pet)
     if CFG.webhookUrl == "" or not _httpReq then return false end
@@ -452,10 +272,11 @@ local function sendToApi(pet)
     return ok
 end
 
+-- Asks the hopper API for the next server: reports the current one via /remove
+-- (which also returns a replacement jobId) and falls back to /server.
 local function getNextServer()
     if CFG.apiBase == "" or not _httpReq then return nil end
     local nextJobId = nil
-    -- Try /remove first (reports current server as done + gets replacement)
     if game.JobId ~= "" then
         pcall(function()
             local res = _httpReq({
@@ -470,7 +291,6 @@ local function getNextServer()
             end
         end)
     end
-    -- Fallback: get a fresh server from /server
     if not nextJobId then
         pcall(function()
             local res = _httpReq({
@@ -480,11 +300,19 @@ local function getNextServer()
             })
             if res and res.Body then
                 local jid = res.Body:match("^%s*(.-)%s*$")
-                if jid and jid ~= "" then nextJobId = jid end
+                if jid and jid ~= "" and not jid:find("[<>{}]") then nextJobId = jid end
             end
         end)
     end
     return nextJobId
+end
+
+-- Queue this script to auto-run again in the next server after teleport.
+local function queueReload()
+    if CFG.loaderUrl == "" or not _queueTp then return end
+    pcall(function()
+        _queueTp('loadstring(game:HttpGet("' .. CFG.loaderUrl .. '"))()')
+    end)
 end
 
 -- ── UI ───────────────────────────────────────────────────────────────────────
@@ -536,7 +364,7 @@ do
     titleLbl.TextSize = 13; titleLbl.TextColor3 = C.accent; titleLbl.TextXAlignment = Enum.TextXAlignment.Center
 
     local sentBadge = Instance.new("TextLabel", hdr)
-    sentBadge.Size = UDim2.new(0, 48, 0, 18); sentBadge.Position = UDim2.new(0, 8, 0.5, -9)
+    sentBadge.Size = UDim2.new(0, 56, 0, 18); sentBadge.Position = UDim2.new(0, 8, 0.5, -9)
     sentBadge.BackgroundColor3 = C.surfHi; sentBadge.BorderSizePixel = 0
     sentBadge.Text = "0 sent"; sentBadge.Font = Enum.Font.GothamBold; sentBadge.TextSize = 9
     sentBadge.TextColor3 = C.accent2
@@ -631,7 +459,7 @@ do
     -- API URL (LO=2)
     local aRow = mkRow(2, 32)
     local aBox = Instance.new("TextBox", aRow)
-    aBox.Size = UDim2.new(1, -16, 1, -8); aBox.Position = UDim2.new(0, 7, 0, 4)
+    aBox.Size = UDim2.new(1, -60, 1, -8); aBox.Position = UDim2.new(0, 7, 0, 4)
     aBox.BackgroundColor3 = C.surfHi; aBox.BorderSizePixel = 0
     aBox.Text = CFG.apiBase; aBox.PlaceholderText = "https://your-app.railway.app"
     aBox.Font = Enum.Font.Gotham; aBox.TextSize = 9; aBox.TextColor3 = C.txt
@@ -640,6 +468,24 @@ do
     Instance.new("UICorner", aBox).CornerRadius = UDim.new(0, 6)
     Instance.new("UIPadding", aBox).PaddingLeft = UDim.new(0, 7)
     aBox.FocusLost:Connect(function() CFG.apiBase = aBox.Text end)
+    local aTest = Instance.new("TextButton", aRow)
+    aTest.Size = UDim2.new(0, 44, 1, -8); aTest.Position = UDim2.new(1, -50, 0, 4)
+    aTest.BackgroundColor3 = C.accent; aTest.BorderSizePixel = 0; aTest.Text = "Test"
+    aTest.Font = Enum.Font.GothamBold; aTest.TextSize = 10; aTest.TextColor3 = C.txt; aTest.AutoButtonColor = false
+    Instance.new("UICorner", aTest).CornerRadius = UDim.new(0, 6)
+    aTest.MouseButton1Click:Connect(function()
+        CFG.apiBase = aBox.Text
+        task.spawn(function()
+            if CFG.apiBase == "" then setStatus("Set API URL first", C.red); return end
+            if not _httpReq then setStatus("No HTTP in executor", C.red); return end
+            local good = false
+            pcall(function()
+                local res = _httpReq({ Url = CFG.apiBase .. "/stats", Method = "GET" })
+                good = res and (res.StatusCode == 200 or res.Success)
+            end)
+            setStatus(good and "API connected ✔" or "API failed", good and C.green or C.red)
+        end)
+    end)
 
     -- Webhook URL (LO=3)
     local wRow = mkRow(3, 32)
@@ -672,58 +518,19 @@ do
         end)
     end)
 
-    -- TP Method (LO=4)
-    local mRow = mkRow(4, 32)
-    local mLbl = Instance.new("TextLabel", mRow)
-    mLbl.Size = UDim2.new(0, 72, 1, 0); mLbl.Position = UDim2.new(0, 10, 0, 0)
-    mLbl.BackgroundTransparency = 1; mLbl.Text = "TP Method"
-    mLbl.Font = Enum.Font.GothamBold; mLbl.TextSize = 10; mLbl.TextColor3 = C.txtMute
-    mLbl.TextXAlignment = Enum.TextXAlignment.Left
-    local mPrev = Instance.new("TextButton", mRow)
-    mPrev.Size = UDim2.new(0, 22, 0, 22); mPrev.Position = UDim2.new(0, 84, 0.5, -11)
-    mPrev.BackgroundColor3 = C.surfHi; mPrev.BorderSizePixel = 0; mPrev.Text = "◄"
-    mPrev.Font = Enum.Font.GothamBold; mPrev.TextSize = 10; mPrev.TextColor3 = C.accent; mPrev.AutoButtonColor = false
-    Instance.new("UICorner", mPrev).CornerRadius = UDim.new(0, 6)
-    local mVal = Instance.new("TextLabel", mRow)
-    mVal.Size = UDim2.new(0, 106, 1, 0); mVal.Position = UDim2.new(0, 108, 0, 0)
-    mVal.BackgroundTransparency = 1; mVal.Text = TP_METHODS[CFG.tpMethodIdx].name
-    mVal.Font = Enum.Font.GothamMedium; mVal.TextSize = 10; mVal.TextColor3 = C.accent2
-    mVal.TextXAlignment = Enum.TextXAlignment.Center
-    local mNext = Instance.new("TextButton", mRow)
-    mNext.Size = UDim2.new(0, 22, 0, 22); mNext.Position = UDim2.new(1, -30, 0.5, -11)
-    mNext.BackgroundColor3 = C.surfHi; mNext.BorderSizePixel = 0; mNext.Text = "►"
-    mNext.Font = Enum.Font.GothamBold; mNext.TextSize = 10; mNext.TextColor3 = C.accent; mNext.AutoButtonColor = false
-    Instance.new("UICorner", mNext).CornerRadius = UDim.new(0, 6)
-    mPrev.MouseButton1Click:Connect(function()
-        CFG.tpMethodIdx = ((CFG.tpMethodIdx - 2) % #TP_METHODS) + 1; mVal.Text = TP_METHODS[CFG.tpMethodIdx].name
-    end)
-    mNext.MouseButton1Click:Connect(function()
-        CFG.tpMethodIdx = (CFG.tpMethodIdx % #TP_METHODS) + 1; mVal.Text = TP_METHODS[CFG.tpMethodIdx].name
-    end)
-
-    -- Anti-Rollback (LO=5)
-    local arRow = mkRow(5, 28); mkLabel(arRow, "Anti-Rollback", 10, C.txtSub)
-    local arSw, _, arToggle = mkSwitch(arRow, -48, CFG.antiRollback)
-    arSw.MouseButton1Click:Connect(function() CFG.antiRollback = not CFG.antiRollback; arToggle(CFG.antiRollback) end)
-
-    -- Auto-TP (LO=6)
-    local atRow = mkRow(6, 28); mkLabel(atRow, "Auto-TP on detect", 10, C.txtSub)
-    local atSw, _, atToggle = mkSwitch(atRow, -48, CFG.autoTp)
-    atSw.MouseButton1Click:Connect(function() CFG.autoTp = not CFG.autoTp; atToggle(CFG.autoTp) end)
-
-    -- Notify All (LO=7)
-    local nRow = mkRow(7, 28); mkLabel(nRow, "Notify all pets", 10, C.txtSub)
+    -- Notify All (LO=4)
+    local nRow = mkRow(4, 28); mkLabel(nRow, "Notify all pets", 10, C.txtSub)
     local nSw, _, nToggle = mkSwitch(nRow, -48, CFG.notifyAll)
     nSw.MouseButton1Click:Connect(function() CFG.notifyAll = not CFG.notifyAll; nToggle(CFG.notifyAll) end)
 
-    -- Server Hopping (LO=8)
-    local hopRow = mkRow(8, 28); mkLabel(hopRow, "Server Hopping", 10, C.txtSub)
+    -- Server Hopping (LO=5)
+    local hopRow = mkRow(5, 28); mkLabel(hopRow, "Server Hopping", 10, C.accent2)
     local hopSw, _, hopToggle = mkSwitch(hopRow, -48, CFG.serverHopping)
     hopSw.MouseButton1Click:Connect(function() CFG.serverHopping = not CFG.serverHopping; hopToggle(CFG.serverHopping) end)
 
-    -- Buttons (LO=9)
+    -- Buttons (LO=6)
     local btnOuter = Instance.new("Frame", body)
-    btnOuter.Size = UDim2.new(1, 0, 0, 30); btnOuter.BackgroundTransparency = 1; btnOuter.LayoutOrder = 9
+    btnOuter.Size = UDim2.new(1, 0, 0, 30); btnOuter.BackgroundTransparency = 1; btnOuter.LayoutOrder = 6
     local btnL = Instance.new("UIListLayout", btnOuter)
     btnL.FillDirection = Enum.FillDirection.Horizontal; btnL.Padding = UDim.new(0, 5)
     btnL.HorizontalAlignment = Enum.HorizontalAlignment.Center; btnL.VerticalAlignment = Enum.VerticalAlignment.Center
@@ -738,8 +545,8 @@ do
         b.MouseLeave:Connect(function() b.BackgroundColor3 = bg end)
         return b
     end
-    local tpLastBtn = mkBtn2("⚡ TP Last", C.accent)
-    local scanBtn   = mkBtn2("⟳ Scan",    C.surfHi)
+    local scanBtn = mkBtn2("⟳ Scan",    C.surfHi)
+    local hopBtn  = mkBtn2("🔀 Hop Now", C.accent)
 
     -- Fit + Drag
     bodyLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(fit)
@@ -761,10 +568,9 @@ do
         if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then dragging = false end
     end)
 
-    -- Logic
-    local lastPet = nil
-    local tpBusy  = false
+    -- ── Core logic: scan once, then hop ──────────────────────────────────────
     local _sentOnce = {}
+    local hopping   = false   -- guards against double-teleport
 
     local function petKey(p) return p.name .. "|" .. tostring(math.round(p.pos.X)) .. "|" .. tostring(math.round(p.pos.Z)) end
     local function isTracked(name)
@@ -774,23 +580,7 @@ do
         return false
     end
 
-    local function doTpTo(pet, label)
-        if tpBusy then return end
-        tpBusy = true
-        local lbl = label or "TP"
-        setStatus(lbl .. " → " .. pet.name .. "…", C.yellow)
-        task.spawn(function()
-            if pet.instance and pet.instance.Parent then
-                local part = pet.instance:IsA("BasePart") and pet.instance
-                    or pet.instance:FindFirstChildWhichIsA("BasePart")
-                if part then pet.cf = part.CFrame end
-            end
-            local ok = tpTo(pet.cf, function(s) setStatus(s, C.txtSub) end)
-            setStatus(ok and ("✔ Arrived: " .. pet.name) or ("✘ TP failed: " .. pet.name), ok and C.green or C.red)
-            tpBusy = false
-        end)
-    end
-
+    -- Scans the current server once and reports any new pets to API + Discord.
     local function doScan()
         local pets = scanPets()
         local notified = 0
@@ -800,50 +590,59 @@ do
                 _sentOnce[key] = true
                 notified = notified + 1
                 bumpSent()
-                lastPet = p
                 task.spawn(function()
                     local sent = sendWebhook(p)
                     if not sent then _sentOnce[key] = nil end
                 end)
                 task.spawn(function() sendToApi(p) end)
-                if CFG.autoTp and not tpBusy then doTpTo(p, "Auto-TP") end
             end
         end
         if #pets == 0 then setStatus("No pets found", C.txtMute)
         elseif notified > 0 then setStatus("Sent " .. notified .. " notification(s)!", C.green)
-        else setStatus(#pets .. " pet(s) — all already notified", C.accent2) end
+        else setStatus(#pets .. " pet(s) — all already sent", C.accent2) end
         fit()
+        return #pets
     end
 
-    scanBtn.MouseButton1Click:Connect(function() setStatus("Scanning…", C.yellow); task.spawn(doScan) end)
-    tpLastBtn.MouseButton1Click:Connect(function()
-        if not lastPet then setStatus("No pet detected yet", C.red); return end
-        doTpTo(lastPet, "TP Last")
-    end)
-
-    -- Main scan loop
-    task.spawn(function()
-        while sg.Parent do pcall(doScan); task.wait(CFG.scanInterval) end
-    end)
-    task.delay(0.5, function() pcall(doScan) end)
-
-    -- Server hopper loop
-    task.spawn(function()
-        task.wait(CFG.hopInterval)
-        while sg.Parent do
-            if CFG.serverHopping and CFG.apiBase ~= "" then
-                setStatus("🔀 Hopping servers…", C.yellow)
-                local nextJobId = getNextServer()
-                if nextJobId and nextJobId ~= "" and nextJobId ~= game.JobId then
-                    task.wait(1.5)
-                    pcall(function()
-                        TeleportService:TeleportToPlaceInstance(CFG.placeId, nextJobId)
-                    end)
-                else
-                    setStatus("Hop: no server available, retrying…", C.txtMute)
-                end
+    -- Reports current server + teleports to the next one.
+    local function hopNow()
+        if hopping then return end
+        hopping = true
+        setStatus("🔀 Finding next server…", C.yellow)
+        task.spawn(function()
+            local nextJobId = getNextServer()
+            queueReload()  -- ensure this script re-runs in the next server
+            task.wait(0.8)
+            local ok = false
+            if nextJobId and nextJobId ~= "" and nextJobId ~= game.JobId then
+                setStatus("🔀 Hopping → " .. nextJobId:sub(1, 8) .. "…", C.yellow)
+                ok = pcall(function() TeleportService:TeleportToPlaceInstance(CFG.placeId, nextJobId) end)
             end
-            task.wait(CFG.hopInterval)
+            -- Fallback: no API server → jump to a random new server of the same place.
+            if not ok then
+                setStatus("🔀 Hopping → random server…", C.yellow)
+                pcall(function() TeleportService:Teleport(CFG.placeId, LocalPlayer) end)
+            end
+            -- If teleport silently failed, allow another attempt later.
+            task.wait(8)
+            hopping = false
+            setStatus("Hop failed — will retry", C.red)
+        end)
+    end
+
+    -- Manual buttons
+    scanBtn.MouseButton1Click:Connect(function() setStatus("Scanning…", C.yellow); task.spawn(doScan) end)
+    hopBtn.MouseButton1Click:Connect(function() hopNow() end)
+
+    -- Automatic per-server cycle: wait for load → scan once → hop (if enabled) → repeat (in next server)
+    task.spawn(function()
+        setStatus("Settling… (" .. CFG.settleDelay .. "s)", C.txtSub)
+        task.wait(CFG.settleDelay)
+        pcall(doScan)
+        -- Wait until hopping is enabled, then jump. Toggling it on triggers the hop.
+        while sg.Parent do
+            if CFG.serverHopping then hopNow(); break end
+            task.wait(1)
         end
     end)
 end
