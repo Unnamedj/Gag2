@@ -1,3 +1,11 @@
+-- Re-queue this script to run again in the next server if teleport happens
+local _queueTp = (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or (rawget(_G, "queue_on_teleport")) or (rawget(_G, "queueonteleport"))
+if _queueTp then
+    pcall(function()
+        _queueTp('loadstring(game:HttpGet("https://raw.githubusercontent.com/Unnamedj/gag2/main/Loader.lua"))()')
+    end)
+end
+
 -- Teleport Bypass Loader → WildPetWebhook
 -- Execute IMMEDIATELY - don't wait for game to load
 local tpService = cloneref(game:GetService("TeleportService"))
