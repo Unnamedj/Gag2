@@ -10,8 +10,96 @@ local UserInputService = game:GetService("UserInputService")
 local Workspace        = game:GetService("Workspace")
 local HttpService      = game:GetService("HttpService")
 local TeleportService  = game:GetService("TeleportService")
+local Lighting         = game:GetService("Lighting")
+local SoundService     = game:GetService("SoundService")
 local LocalPlayer      = Players.LocalPlayer
 local _cloneref        = typeof(cloneref) == "function" and cloneref or function(x) return x end
+
+-- ── VPS / Multi-bot Performance Optimizations ────────────────────────────────
+-- FPS cap: 1 FPS is enough for a headless scanner; saves massive CPU per instance.
+-- Tries Delta, Synapse, Fluxus, then generic fallback.
+pcall(function() setfpscap(1) end)
+pcall(function() if syn and syn.set_fps_cap then syn.set_fps_cap(1) end end)
+pcall(function() if fluxus and fluxus.set_fps_cap then fluxus.set_fps_cap(1) end end)
+pcall(function()
+    -- Delta executor flag: disable renderer outright
+    if getgenv and getgenv().delta and getgenv().delta.setfpscap then
+        getgenv().delta.setfpscap(1)
+    end
+end)
+
+-- Disable 3D rendering entirely (supported by some executors: Delta, Synapse X)
+pcall(function() RunService:Set3dRenderingEnabled(false) end)
+pcall(function() if syn and syn.set_rendering_enabled then syn.set_rendering_enabled(false) end end)
+
+-- Minimum graphics quality
+pcall(function()
+    local s = settings()
+    s.Rendering.QualityLevel      = Enum.QualityLevel.Level01
+    s.Rendering.EagerBulkExecution = true
+    s.Rendering.MaxDecals          = 0
+    s.Rendering.MaxParticles       = 0
+end)
+
+-- Kill shadows and fog
+pcall(function()
+    Lighting.GlobalShadows    = false
+    Lighting.FogEnd           = 9e9
+    Lighting.Brightness       = 0
+    Lighting.EnvironmentDiffuseScale  = 0
+    Lighting.EnvironmentSpecularScale = 0
+end)
+
+-- Mute SoundService globally
+pcall(function()
+    SoundService.AmbientReverb = Enum.ReverbType.NoReverb
+    SoundService.DistanceFactor = 0
+end)
+
+-- Disable particles, fire, smoke, sparkles, beams, and mute all sounds in the workspace.
+-- Runs in background so it doesn't block the settle timer.
+task.spawn(function()
+    for _, obj in ipairs(game:GetDescendants()) do
+        local t = obj.ClassName
+        if t == "Sound" then
+            pcall(function() obj.Volume = 0; obj:Stop() end)
+        elseif t == "ParticleEmitter" or t == "Smoke" or t == "Fire"
+            or t == "Sparkles" or t == "Beam" or t == "Trail" then
+            pcall(function() obj.Enabled = false end)
+        elseif t == "SpecialMesh" or t == "SelectionBox" then
+            pcall(function() obj.Transparency = 1 end)
+        end
+    end
+    -- Also mute anything that spawns later
+    game.DescendantAdded:Connect(function(obj)
+        local t = obj.ClassName
+        if t == "Sound" then
+            pcall(function() obj.Volume = 0; obj:Stop() end)
+        elseif t == "ParticleEmitter" or t == "Smoke" or t == "Fire"
+            or t == "Sparkles" or t == "Beam" or t == "Trail" then
+            pcall(function() obj.Enabled = false end)
+        end
+    end)
+end)
+
+-- Stop character animations and disable auto-rotate / auto-jump
+pcall(function()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if hum then
+        hum.AutoJumpEnabled = false
+        hum.AutoRotate      = false
+        hum.WalkSpeed       = 0
+        hum.JumpPower       = 0
+    end
+    local animator = hum and hum:FindFirstChildOfClass("Animator")
+    if animator then
+        for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+            pcall(function() track:Stop(0) end)
+        end
+    end
+end)
 
 -- ── Anti-detect ──────────────────────────────────────────────────────────────
 task.spawn(function()
@@ -634,15 +722,25 @@ do
     scanBtn.MouseButton1Click:Connect(function() setStatus("Scanning…", C.yellow); task.spawn(doScan) end)
     hopBtn.MouseButton1Click:Connect(function() hopNow() end)
 
-    -- Automatic per-server cycle: wait for load → scan once → hop (if enabled) → repeat (in next server)
+    -- Automatic per-server cycle (strictly sequential: settle → scan → hop)
+    -- Hop is GUARANTEED to only fire after doScan() has fully returned.
     task.spawn(function()
         setStatus("Settling… (" .. CFG.settleDelay .. "s)", C.txtSub)
         task.wait(CFG.settleDelay)
+
+        -- STEP 1: SCAN — blocks here until scan is 100% complete
+        setStatus("Scanning…", C.yellow)
         pcall(doScan)
-        -- Wait until hopping is enabled, then jump. Toggling it on triggers the hop.
-        while sg.Parent do
-            if CFG.serverHopping then hopNow(); break end
-            task.wait(1)
+        -- Brief pause so any task.spawn'd HTTP requests get a chance to fire
+        task.wait(1.5)
+
+        -- STEP 2: HOP — only reached after scan is done
+        if CFG.serverHopping then
+            hopNow()
+        else
+            -- Wait here until user toggles Server Hopping on, then hop
+            repeat task.wait(0.5) until not sg.Parent or CFG.serverHopping
+            if sg.Parent then hopNow() end
         end
     end)
 end
