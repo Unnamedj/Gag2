@@ -2,123 +2,66 @@
 
 **Wild Pet Discord/Web Notifier + Auto-TP + Auto Joiner + Continuous Server Hopper**
 
-A complete toolkit for Grow a Garden 2 (and compatible with GaG1 wild pets) featuring:
-
-- **Wild Pet Notifier**: Scans for valuable wild pets, sends rich Discord webhooks + to your personal web dashboard.
-- **Beautiful Web Dashboard**: View all spotted pets in real-time, filter by value, one-click copy join commands or teleport scripts.
-- **Auto Joiner Script**: Standalone Lua that polls the dashboard API and automatically joins the best servers (highest value pets).
-- **GaG2 Server Hopper/Scraper**: High-performance proxy-rotating server pool manager for continuous hopping in Grow a Garden 2. Dispenses fresh Job IDs via API for multi-bot farms.
+One-click deployable on Railway with a beautiful live dashboard showing recent pet detections, stats, and one-click joins.
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Deploy on Railway (Recommended - 1 Click)
 
-### 1. Clone & Setup Server
+1. Go to [Railway.app](https://railway.app) → New Project → **Deploy from GitHub**
+2. Connect/connect this repo (`Unnamedj/Gag2` or your fork)
+3. Railway auto-detects Node.js and runs `npm start`
+4. Your dashboard is instantly live at the provided URL
+5. (Optional) Add a Volume or upload `proxies.txt` later for the hopper
+
+**That's it.** No config needed. The dashboard includes:
+- Live updating cards of recent wild pets (with emoji, value, JobID, Join buttons)
+- Real-time hopper stats
+- Recent activity / detections
+- Ready for your Lua scripts to report pets
+
+---
+
+## Local Run
+
 ```bash
 git clone https://github.com/Unnamedj/Gag2.git
 cd Gag2
-npm install express axios https-proxy-agent
-# Add your proxies (one per line) to proxies.txt
-```
-
-### 2. Run the Web + Hopper Server
-```bash
+npm install
 node app.js
 ```
-Server runs on http://localhost:8080 (or set PORT env)
 
-Open http://localhost:8080 in your browser for the live dashboard.
+Open http://localhost:8080
 
-### 3. Configure & Load Lua Scripts (Executor)
-- Edit `WildPetWebhook.lua`:
-  - Set your Discord `webhookUrl` (optional but recommended for pings)
-  - Set `webUrl = "http://YOUR_SERVER_IP:8080/notify"`  (IMPORTANT for dashboard & autojoiner)
-  - Adjust `notifyList`, `minValue`, `autoTp` etc.
-- Execute `WildPetWebhook.lua` in game (supports most executors with HTTP + getrawmetatable)
+## Dashboard Highlights
 
-- For auto-joining best pets from anywhere: Execute `AutoJoiner.lua` (configure the `API_BASE` to your server)
+- Modern dark glass UI with Tailwind
+- Recent pets shown as beautiful cards (click to copy Teleport command or open join modal)
+- Live polling every ~8 seconds
+- Hopper pool stats + recycling info
+- Auto Joiner section with instructions
+- Mobile-friendly layout
 
-### 4. Proxies (for Hopper)
-Create `proxies.txt` with residential proxies (recommended for Roblox scraping to avoid 429s). Format examples supported:
-- `user:pass@host:port`
-- `host:port:user:pass`
-- `http://user:pass@host:port`
+## How the pieces work together
 
-The hopper auto-rotates them.
+1. `WildPetWebhook.lua` (in-game) → detects pets → sends to your Railway URL `/notify` + optional Discord
+2. Dashboard shows them instantly in the recent pets section
+3. `AutoJoiner.lua` polls `/api/best` and auto-teleports to the highest value one
+4. Hopper (`/server`) gives fresh GaG2 JobIDs for multi-bot farming
 
----
+## API Endpoints
 
-## 📡 API Endpoints
+- `GET /` — Beautiful Dashboard (recent pets + logs style + stats)
+- `POST /notify` — Lua reports new pet here
+- `GET /api/pets` — JSON list of recent detections (perfect for logs/AJ)
+- `GET /api/best` — Best current pet for auto-joiners
+- `GET /server` — Fresh GaG2 servers from the hopper
 
-| Method | Endpoint          | Description |
-|--------|-------------------|-------------|
-| GET    | /                 | Beautiful live Dashboard (HTML + Tailwind) |
-| POST   | /notify           | Receive pet detection from Lua (JSON) |
-| GET    | /api/pets         | List recent wild pets (sorted by value desc) |
-| GET    | /api/best         | Get the single best current pet/server |
-| GET    | /server?size=N    | Get N fresh JobIDs for GaG2 hopping (requires Username header) |
-| GET    | /stats            | Full hopper + pet stats JSON |
-| GET    | /recycle          | Force recycle old dispensed servers |
-| POST   | /remove           | Report bad server, get replacement (for bots) |
-| GET    | /bots-online      | Count of active bot connections |
+## Included Files
 
----
+- `app.js` — Full backend + embedded modern dashboard (Railway ready)
+- `WildPetWebhook.lua` — In-game detector + reporter
+- `AutoJoiner.lua` — UI-ready auto joiner script
+- `package.json` + `.gitignore` — Ready for Railway
 
-## 🐾 Wild Pet Features (Lua)
-
-- Scans multiple spawn folders + descendants
-- Values parsed from Sheckles/K/M/B/T labels
-- Rich Discord embeds with emoji, value, time left, coords, JobID + ready-to-paste TeleportToPlaceInstance
-- Anti-rollback TP with 8 methods + cascade + gravity hack + anchor pulse
-- Session dedup so same pet+location notified only once
-- UI in-game with toggles for Auto-TP, Anti-Rollback, Notify All, TP Method
-
-## 🔄 Continuous Hopping (GaG2)
-
-The included hopper is tuned for **Grow a Garden 2** (Place ID `97598239454123`).
-It maintains a large pool of public servers, recycles them, handles rate limits with adaptive delays + rotating proxies.
-Perfect for multi-account farming, pet hunting, or event grinding.
-
-Bots connect with `Username` header to claim servers via `/server`.
-
-## 🛠️ Auto Joiner
-
-`AutoJoiner.lua` continuously polls `/api/best` (or filtered `/api/pets`).
-When a high-value pet appears, it automatically executes:
-```lua
-game:GetService("TeleportService"):TeleportToPlaceInstance(placeId, jobId)
-```
-Configure thresholds, poll interval, min value, and whether to only join if better than current.
-
-Great for AFK pet hunting across many servers.
-
----
-
-## ⚙️ Configuration Tips
-
-- `minValue` in Lua: Only notify pets worth this or more (0 = all)
-- Dashboard auto-cleans old entries (>30 min)
-- Hopper has 50k server threshold auto-wipe after 50min, periodic 80% cache wipe every 2h
-- For production: Run behind nginx, use PM2, set real domain/IP for Lua webUrl
-- Security: The /notify endpoint is open by design (for your Lua). Add auth if exposing publicly.
-
-## 📁 Project Structure
-
-- `WildPetWebhook.lua` — In-game notifier + auto TP (updated for dual Discord + Web)
-- `AutoJoiner.lua` — Standalone auto-join / hopper client script
-- `app.js` — All-in-one Node.js server (webhook receiver + dashboard + GaG2 hopper)
-- `proxies.txt` (you create) — Proxy list for scraping
-- `README.md` — This file
-
-## 🤝 Credits & Notes
-
-Adapted from community scripts (Wild Pet notifier logic + Tyler Hopper style server management).
-For educational / personal use on Roblox. Use responsibly.
-
-If you find good wild pets or have suggestions, open an issue!
-
-**Place IDs**:
-- GaG2: 97598239454123
-- Original (wild pets often in): Check your game
-
-Happy farming! 🌱🐸🦊
+Happy farming on GaG2! 🌱
