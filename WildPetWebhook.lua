@@ -396,11 +396,35 @@ local function getNextServer()
 end
 
 -- Queue this script to auto-run again in the next server after teleport.
+-- Uses teleport-bypass loader: sets TeleportGui before game loads, cancels any
+-- blocked teleport, then loadstrings WildPetWebhook back in.
 local function queueReload()
     if CFG.loaderUrl == "" or not _queueTp then return end
-    pcall(function()
-        _queueTp('loadstring(game:HttpGet("' .. CFG.loaderUrl .. '"))()')
-    end)
+    local script = [[
+local tpService = cloneref(game:GetService("TeleportService"))
+tpService:SetTeleportGui(tpService)
+repeat wait() until game:IsLoaded()
+local logService = cloneref(game:GetService("LogService"))
+local stoppedTp = false
+local startTime = tick()
+local maxWaitTime = 6
+while not stoppedTp and (tick() - startTime) < maxWaitTime do
+    for i,v in logService:GetLogHistory() do
+        if v.message:find("cannot be cloned") then
+            stoppedTp = true; break
+        end
+    end
+    task.wait(0.05)
+end
+tpService:TeleportCancel()
+tpService:SetTeleportGui(nil)
+wait(0.3)
+local ok, err = pcall(function()
+    return loadstring(game:HttpGet("]] .. CFG.loaderUrl .. [["))()
+end)
+if not ok then warn("[LOADER] Failed: " .. tostring(err)) end
+]]
+    pcall(function() _queueTp(script) end)
 end
 
 -- ── UI ───────────────────────────────────────────────────────────────────────
