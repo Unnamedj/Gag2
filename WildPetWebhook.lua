@@ -60,7 +60,7 @@ end)
 -- ── Config ───────────────────────────────────────────────────────────────────
 local CFG = {
     -- API / hopper server (your Railway URL, no trailing slash)
-    apiBase        = "",             -- e.g. "https://your-app.railway.app"
+    apiBase        = "https://gag2-production-d10c.up.railway.app",
     botUsername    = "Bot1",         -- shown in dashboard bots count
 
     -- Discord webhook (leave "" to skip Discord)

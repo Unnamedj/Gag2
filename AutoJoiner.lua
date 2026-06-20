@@ -26,7 +26,7 @@ end)
 
 -- ── Config ───────────────────────────────────────────────────────────────────
 local CFG = {
-    apiBase       = "",          -- e.g. "https://your-app.railway.app"
+    apiBase       = "https://gag2-production-d10c.up.railway.app",
     pollInterval  = 6,           -- seconds between API polls
     scanInterval  = 1.5,         -- seconds between local workspace scans
     minValue      = 0,           -- hide pets below this value ($)
